@@ -122,13 +122,18 @@ Host integration:
                                  to container. Otherwise same as 'oneway'.
                          altv:   Same as 'superv' but using keys [ALT][v].
                          no:     Do not share clipboard.
- -g, --gpu [=yes|no|iglx|virgl] GPU access for hardware accelerated OpenGL.
+ -g, --gpu [=yes|no|iglx|virgl|cdi] GPU access for hardware accelerated OpenGL.
                        Works best with open source drivers on host and in image.
                        For closed source nvidia drivers regard terminal output.
                        Direct rendering supported by few X server options only.
                        Arg 'iglx' enables indirect rendering (--xorg only).
                        Arg 'virgl' allows GPU access for all X servers, but
                        with limited performance and with --xc only.
+                       Arg 'cdi' assumes Container Device Interface (CDI) will
+                       be used to enable GPU and driver without having to mount
+                       devices manually or having to install the driver inside
+                       the container. This assumes the user also specifies
+                       --device GPU (i.e. 'nvidia.com/gpu=all') to pass the GPU.
  -I, --network [=NET]  Allow internet access. (i.e. allow Docker default.)
                        For optional argument NET see Docker documentation of
                        docker run option --network. Docker default is bridge.
@@ -153,6 +158,8 @@ Shared host folders or volumes:
      --share=ARG       Share host file or folder ARG. Read-only with ARG:ro
                        Device files in /dev can be shared, too.
                        ARG can also be a volume instead of a host folder.
+     --device=ARG      Share a device with the container, this may not be a path,
+                       but rather a CDI specification for GPUs.
 
 X server options:
      --auto            Automatically choose X server (default). Influenced
@@ -2187,6 +2194,11 @@ setup_gpu() {                   # option --gpu: share /dev/dri and check nvidia 
 
   Containerusergroups="$Containerusergroups video render"
 
+  [ -n "$Cdigpu" ] && {
+    note "Skipping GPU setup when using CDI."
+    return 0
+  }
+
   # share device files
   while read -r Gpudevice ; do
     store_runoption volume "$Gpudevice"
@@ -2515,6 +2527,12 @@ $(nl -ba < "$Pulseaudioconf")"
   return 0
 }
 setup_vaapi() {                 # option --gpu: setup for VAAPI and VDPAU video decoding acceleration
+
+  [ -n "$Cdigpu" ] && {
+    note "Skipping VA API setup when using CDI."
+    return 0
+  }
+
   # support for prime-run / discrete NVIDIA card #394
   [ -n "$__NV_PRIME_RENDER_OFFLOAD" ] && DRI_PRIME="1" && store_runoption env "__NV_PRIME_RENDER_OFFLOAD=$__NV_PRIME_RENDER_OFFLOAD"
   [ -n "$__VK_LAYER_NV_optimus" ]     && DRI_PRIME="1" && store_runoption env "__VK_LAYER_NV_optimus=$__VK_LAYER_NV_optimus"
@@ -5580,8 +5598,8 @@ check_backend() {               # options --backend, --rootless
       storeinfo "containerrootrc=ready"
       Sharefoldercontainer="$Sharefolder"
       # --dbus, --hostdbus, --init
-      check_optionset "--backend=$Backend" "--alsa --cap-default --group-add --hostipc --ipc --limit --home --name --network --newprivileges --no-entrypoint --no-setup \
-                       --printer --pulseaudio --runasroot --runtime --share --sharecgroup --sudouser --webcam" ||:
+      check_optionset "--backend=$Backend" "--alsa --cap-default --device --group-add --hostipc --ipc --limit --home --name --network --newprivileges --no-entrypoint
+                       --no-setup --printer --pulseaudio --runasroot --runtime --share --sharecgroup --sudouser --webcam" ||:
       check_optionset "--backend=$Backend" "--user" || error "Option --backend=$Backend: Option --user is not allowed.
   Please try option --hostuser instead."
       # set defaults. Some might look misleading just to avoid later messages, but not affecting the setup.
@@ -6413,6 +6431,12 @@ create_backendcommand() {       ### create command to run docker|podman|nerdctl 
     esac
   done < <(store_runoption dump volume)
 
+  # --device
+  while read -r Line; do
+    Backendcommand="$Backendcommand \\
+  --device $Line"
+  done < <(store_runoption dump device)
+
   # --gpu: share NVIDIA driver installer
   [ -f "$Nvidiainstallerfile" ] && {
     case "$Backend" in
@@ -6939,6 +6963,7 @@ setup_initsystem() {            # option init: set up capabilities, check or cre
 store_runoption() {             # store env, cap or volume/device for docker command
   # $1  env     store environment variable $2
   #     volume  store volume or device path $2
+  #     device  store device $2
   #     cap     store capability $2
   #     dump    dump all entries of $2
   local Count Line Path Readwritemode
@@ -6971,6 +6996,10 @@ store_runoption() {             # store env, cap or volume/device for docker com
         ;;
       esac
     ;;
+    device)
+      Sharedevicescount="$((Sharedevicescount + 1))"
+      Sharedevices[$Sharedevicescount]="${2:-}"
+    ;;
     cap)
       for Line in ${2:-} ; do
         Capabilities="$Capabilities
@@ -6981,6 +7010,7 @@ $Line"
       case "${2:-}" in
         env) for ((Count=$Containerenvironmentcount ; Count>=1 ; Count --)) ; do echo "${Containerenvironment[$Count]}" ; done ;;
         volume) for ((Count=1 ; Count<=$Sharevolumescount ; Count ++))      ; do echo "${Sharevolumes[$Count]}" ; done ;;
+        device) for ((Count=1 ; Count<=$Sharedevicescount ; Count ++))      ; do echo "${Sharedevices[$Count]}" ; done ;;
         cap)
           while read Line; do
             [ "$Line" ] && case "$Capdropall" in
@@ -9231,7 +9261,7 @@ parse_options() {               # parse cli options
   Longoptions="$Longoptions,border::,dpi:,fullscreen,output-count:,rotate:,scale:,size:,xfishtank"                          # X/Wayland appearance options
   Longoptions="$Longoptions,clean-xhost,composite::,display:,keymap:,vt::,westonini:,xauth::,xhost::,xoverip::,xtest::"     # X/Wayland config
   Longoptions="$Longoptions,checkwindow::,fallback::,preset:,pull::"                                                        # x11docker config
-  Longoptions="$Longoptions,cachebasedir:,home::,homebasedir:,share:"                                                       # Host folders
+  Longoptions="$Longoptions,cachebasedir:,home::,homebasedir:,share:,device:"                                               # Host folders and devices
   Longoptions="$Longoptions,alsa::,clipboard::,gpu::,lang::,printer::,pulseaudio::,webcam"                                  # Host integration features
   Longoptions="$Longoptions,backend:,env:,mobyvm,name:,no-entrypoint,no-setup,rootfs,rootless::,runtime:,snap,workdir:"     # Container config
   Longoptions="$Longoptions,cap-default,ipc::,limit::,newprivileges::,network::"                                            # Container capabilities
@@ -9413,7 +9443,7 @@ ${2:-}"                       ; shift ;;                             # Add custo
          --stdin)             Forwardstdin="yes" ;;                  # Forward stdin to container command
          --workdir)           Workdir="${2:-}" ; shift ;;            # Set working directory
 
-     #### host folders and docker volumes
+     #### host folders, volumes and devices
       -m)                     Sharehome="host" ;;
          --home|--homedir)    Sharehome="yes"                        # Share host folder as HOME in container, ~/x11docker/imagename or $2
                               [ "${1:-}" = "--homedir" ] && note "Option --homedir is deprecated.
@@ -9422,6 +9452,8 @@ ${2:-}"                       ; shift ;;                             # Add custo
          --share|--sharedir)  store_runoption volume "${2:-}"         # Share host file, device or directory
                               [ "${1:-}" = "--sharedir" ] && note "Option --sharedir is deprecated.
   Please use option --share=PATH instead."
+                              shift ;;
+         --device)            store_runoption device "${2:-}"         # Share device
                               shift ;;
          --homebasedir)       Hosthomebasefolder="${2:-}" ; shift ;; # Set base folder for --home instead of ~/.local/share/x11docker
          --cachebasedir)      Cachebasefolder="${2:-}" ; shift ;;    # Set base folder for cache  instead of ~/.cache/x11docker
@@ -9675,6 +9707,11 @@ check_options_arguments() {     # check for [likely] valid arguments
   # --gpu
   case "$Sharegpu" in
     yes|no|direct|iglx|virgl) ;;
+    cdi)
+      note "CDI will be used to configure GPU devices."
+      Sharegpu=yes
+      Cdigpu=1
+    ;;
     *)
       note "Option --gpu: Unknown argument '$Sharegpu'.
   Fallback: Disabling option --gpu."
@@ -11138,6 +11175,8 @@ declare_variables() {           # declare global variables
   Sharehome="no"                                  # --home: Share a folder ~/.local/share/x11docker/Imagename with created container
   Sharevolumes=""                                 # --share: Host files or folders or devices to share, array
   Sharevolumescount="0"                           # --share: Counts shared folders in array
+  Sharedevices=""                                 # --device: Host devices to share, array
+  Sharedevicescount="0"                           # --device: Counts shared devices in array
   Sharewebcam="no"                                # --webcam: Share webcam device /dev/video*
 
   # Image information
@@ -11156,6 +11195,7 @@ declare_variables() {           # declare global variables
   Backendinfo=""                                  # output of 'docker info'
   Capabilities=""                                 # Capabilities to add. Default: none, exceptions for --init, --sudouser
   Capdropall="yes"                                # --cap-default: Drop all container capabilities and set --securty-opt=no-new-privileges yes/no
+  Cdigpu=""                                       # Delegates GPU, drivers and libraries setup to CDI infrastructure
   Chrootmountlist=""
   Containercommand=""                             # Container command [+args]
   Containerentrypoint=""
