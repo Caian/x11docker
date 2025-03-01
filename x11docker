@@ -9604,7 +9604,6 @@ check_options_arguments() {     # check for [likely] valid arguments
   ## --password
   ## --user
   # --env
-  # --port
   ## --shell
   ## --workdir
   # --print*
