@@ -316,6 +316,7 @@ Container special configuration:
      --snap            Enable support for Docker in snap.
      --stdin           Forward stdin of x11docker to container command.
      --workdir=DIR     Set working directory DIR.
+     --port SPEC       Add a custom port forwarding rule.
 
 Additional commands: (You might need to move them to background with 'CMD &'.)
      --runasroot=CMD   Run command CMD as root in container.
@@ -6647,6 +6648,16 @@ create_backendcommand() {       ### create command to run docker|podman|nerdctl 
     esac
   done < <(store_runoption dump env)
 
+  # --env: add port specs.
+  while read Line; do
+    case "$Backend" in
+      docker|podman|nerdctl)
+        Backendcommand="$Backendcommand \\
+  -p '$(escapestring "$Line")'"
+      ;;
+    esac
+  done < <(store_runoption dump port)
+
   # add custom docker arguments, imagename and imagecommand
   [ "$Customdockeroptions" ] && {
     case "$Backend" in
@@ -6947,6 +6958,10 @@ store_runoption() {             # store env, cap or volume/device for docker com
       Containerenvironmentcount="$((Containerenvironmentcount + 1))"
       Containerenvironment[$Containerenvironmentcount]="${2:-}"
     ;;
+    port)
+      Containerportcount="$((Containerportcount + 1))"
+      Containerport[$Containerportcount]="${2:-}"
+    ;;
     volume)
       Path="$(convertpath subsystem "${2:-}")"
       Readwritemode="$(echo "${2:-}" | rev | cut -c1-3 | rev)"
@@ -6980,6 +6995,7 @@ $Line"
     dump)
       case "${2:-}" in
         env) for ((Count=$Containerenvironmentcount ; Count>=1 ; Count --)) ; do echo "${Containerenvironment[$Count]}" ; done ;;
+        port) for ((Count=1 ; Count<=$Containerportcount ; Count ++))      ; do echo "${Containerport[$Count]}" ; done ;;
         volume) for ((Count=1 ; Count<=$Sharevolumescount ; Count ++))      ; do echo "${Sharevolumes[$Count]}" ; done ;;
         cap)
           while read Line; do
@@ -9223,33 +9239,33 @@ setup_verbosity() {             # options --verbose, --stdout, --stderr
 parse_options() {               # parse cli options
   local Shortoptions Longoptions Parsedoptions Presetoptions Presetfile
   Shortoptions="aAcdDfFghHiIKlmnpPqtTvVwWxXyY"
-  Shortoptions="${Shortoptions}e"                                                                                           # deprecated
-  Longoptions="$Longoptions,auto,desktop,tty,wayland,wm::,xc::,xonly"                                                       # Influencing auto-setup of X/Wayland/x11docker
-  Longoptions="$Longoptions,hostdisplay,nxagent,runx,xephyr,xpra,xpra2,xorg,xvfb,xwin"                                      # X servers
-  Longoptions="$Longoptions,weston-xwayland,xpra-xwayland,xpra2-xwayland,xwayland"                                          # X servers depending on a Wayland compositor
-  Longoptions="$Longoptions,hostwayland,kwin,weston"                                                                        # Wayland compositors without X
-  Longoptions="$Longoptions,border::,dpi:,fullscreen,output-count:,rotate:,scale:,size:,xfishtank"                          # X/Wayland appearance options
-  Longoptions="$Longoptions,clean-xhost,composite::,display:,keymap:,vt::,westonini:,xauth::,xhost::,xoverip::,xtest::"     # X/Wayland config
-  Longoptions="$Longoptions,checkwindow::,fallback::,preset:,pull::"                                                        # x11docker config
-  Longoptions="$Longoptions,cachebasedir:,home::,homebasedir:,share:"                                                       # Host folders
-  Longoptions="$Longoptions,alsa::,clipboard::,gpu::,lang::,printer::,pulseaudio::,webcam"                                  # Host integration features
-  Longoptions="$Longoptions,backend:,env:,mobyvm,name:,no-entrypoint,no-setup,rootfs,rootless::,runtime:,snap,workdir:"     # Container config
-  Longoptions="$Longoptions,cap-default,ipc::,limit::,newprivileges::,network::"                                            # Container capabilities
-  Longoptions="$Longoptions,group-add:,hostuser:,password::,sudouser::,user:,shell:"                                        # Container user
-  Longoptions="$Longoptions,dbus::,init::,hostdbus,sharecgroup"                                                             # Container init and DBus
-  Longoptions="$Longoptions,stdin,interactive"                                                                              # Container interaction
-  Longoptions="$Longoptions,runasuser:,runfromhost:,runasroot:"                                                             # Additional commands to execute
-  Longoptions="$Longoptions,printenv::,printid::,printinfofile::,printpid1::"                                               # Output of vars on stdout
-  Longoptions="$Longoptions,debug,printcheck,quiet,verbose::"                                                               # Verbose options
-  Longoptions="$Longoptions,build,cleanup,help,launcher,licence,license,version"                                            # Special options without starting X or container
-  Longoptions="$Longoptions,install,remove,remove-oldprefix,update::,update-master::"                                       # Installation
-  #
-  Longoptions="$Longoptions,experimental,keepcache,remountcgroup,xopt:,xorgconf:"                                           # Experimental
-  Longoptions="$Longoptions,dbus-system,enforce-i,exe,homedir:,hostipc,hostnet,iglx,kwin-xwayland"                          # Deprecated
-  Longoptions="$Longoptions,no-auth,no-internet,no-xhost"                                                                   # Deprecated
-  Longoptions="$Longoptions,sharedir:,sharessh,systemd,showenv,showid,showinfofile,showpid1"                                # Deprecated
-  Longoptions="$Longoptions,cachedir:,no-init,nothing,no-xtest,openrc,podman,pull::,ps,pw::,runit,silent,starter"           # Removed
-  Longoptions="$Longoptions,stderr,stdout,sys-admin,sysvinit,tini,trusted,untrusted,vcxsrv,xdummy"                          # Removed
+  Shortoptions="${Shortoptions}e"                                                                                             # deprecated
+  Longoptions="$Longoptions,auto,desktop,tty,wayland,wm::,xc::,xonly"                                                         # Influencing auto-setup of X/Wayland/x11docker
+  Longoptions="$Longoptions,hostdisplay,nxagent,runx,xephyr,xpra,xpra2,xorg,xvfb,xwin"                                        # X servers
+  Longoptions="$Longoptions,weston-xwayland,xpra-xwayland,xpra2-xwayland,xwayland"                                            # X servers depending on a Wayland compositor
+  Longoptions="$Longoptions,hostwayland,kwin,weston"                                                                          # Wayland compositors without X
+  Longoptions="$Longoptions,border::,dpi:,fullscreen,output-count:,rotate:,scale:,size:,xfishtank"                            # X/Wayland appearance options
+  Longoptions="$Longoptions,clean-xhost,composite::,display:,keymap:,vt::,westonini:,xauth::,xhost::,xoverip::,xtest::"       # X/Wayland config
+  Longoptions="$Longoptions,checkwindow::,fallback::,preset:,pull::"                                                          # x11docker config
+  Longoptions="$Longoptions,cachebasedir:,home::,homebasedir:,share:"                                                         # Host folders
+  Longoptions="$Longoptions,alsa::,clipboard::,gpu::,lang::,printer::,pulseaudio::,webcam"                                    # Host integration features
+  Longoptions="$Longoptions,backend:,env:,port:,mobyvm,name:,no-entrypoint,no-setup,rootfs,rootless::,runtime:,snap,workdir:" # Container config
+  Longoptions="$Longoptions,cap-default,ipc::,limit::,newprivileges::,network::"                                              # Container capabilities
+  Longoptions="$Longoptions,group-add:,hostuser:,password::,sudouser::,user:,shell:"                                          # Container user
+  Longoptions="$Longoptions,dbus::,init::,hostdbus,sharecgroup"                                                               # Container init and DBus
+  Longoptions="$Longoptions,stdin,interactive"                                                                                # Container interaction
+  Longoptions="$Longoptions,runasuser:,runfromhost:,runasroot:"                                                               # Additional commands to execute
+  Longoptions="$Longoptions,printenv::,printid::,printinfofile::,printpid1::"                                                 # Output of vars on stdout
+  Longoptions="$Longoptions,debug,printcheck,quiet,verbose::"                                                                 # Verbose options
+  Longoptions="$Longoptions,build,cleanup,help,launcher,licence,license,version"                                              # Special options without starting X or container
+  Longoptions="$Longoptions,install,remove,remove-oldprefix,update::,update-master::"                                         # Installation
+                                                                                                                              #
+  Longoptions="$Longoptions,experimental,keepcache,remountcgroup,xopt:,xorgconf:"                                             # Experimental
+  Longoptions="$Longoptions,dbus-system,enforce-i,exe,homedir:,hostipc,hostnet,iglx,kwin-xwayland"                            # Deprecated
+  Longoptions="$Longoptions,no-auth,no-internet,no-xhost"                                                                     # Deprecated
+  Longoptions="$Longoptions,sharedir:,sharessh,systemd,showenv,showid,showinfofile,showpid1"                                  # Deprecated
+  Longoptions="$Longoptions,cachedir:,no-init,nothing,no-xtest,openrc,podman,pull::,ps,pw::,runit,silent,starter"             # Removed
+  Longoptions="$Longoptions,stderr,stdout,sys-admin,sysvinit,tini,trusted,untrusted,vcxsrv,xdummy"                            # Removed
 
   # default preset files
   parse_preset "default" ||:
@@ -9394,6 +9410,8 @@ ${2:-}"                       ; shift ;;                             # Add custo
          --backend)           Backend="${2:-}" ; shift ;;            # container backend to use: docker, podman, nerdctl, others
          --cap-default)       Capdropall="no" ;;                     # Don't use --cap-drop=ALL --security-opt=no-new-privileges
          --env)               store_runoption env "${2:-}"           # Set container environment variables
+                              shift ;;
+         --port)              store_runoption port "${2:-}"          # Add container port forwarding
                               shift ;;
          --ipc)               Shareipc="${2:-host}" ; shift ;;
          --limit)             Limitresources="${2:-0.5}" ; shift ;;  # Limited CPU and RAM access
@@ -9586,6 +9604,7 @@ check_options_arguments() {     # check for [likely] valid arguments
   ## --password
   ## --user
   # --env
+  # --port
   ## --shell
   ## --workdir
   # --print*
@@ -11162,6 +11181,8 @@ declare_variables() {           # declare global variables
   Containerenvironment=""                         # --env: Environment variables
   Containerenvironmentcount="0"
   Containerenvironmentfile="container.environment" # file to store final container environment
+  Containerport=""                                # --port: Port specs
+  Containerportcount="0"
   Containerlocaltimefile="libc.localtime"         # localtime file from host shared to container
   Containername=""                                # --name: Container name
   Containersetup="yes"
